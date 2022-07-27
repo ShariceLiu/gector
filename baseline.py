@@ -58,7 +58,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_path',
                         help='Path to the model file.', nargs='+',
-                        default='/home/alta/BLTSpeaking/exp-vr313/GEC/gector/trained_models/roberta_1_gectorv2.th'
+                        default='pre_trained/bert_0_gectorv2.th'
                         )
     parser.add_argument('--vocab_path',
                         help='Path to the model file.',
