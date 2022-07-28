@@ -3,6 +3,8 @@ import argparse
 from utils.helpers import read_lines, normalize
 from gector.gec_model import GecBERTModel
 
+from utils.preprocess_data import convert_data_from_raw_files
+
 
 def predict_for_file(input_file, output_file, model, batch_size=32, to_normalize=False):
     test_data = read_lines(input_file)
@@ -29,6 +31,18 @@ def predict_for_file(input_file, output_file, model, batch_size=32, to_normalize
         f.write("\n".join(result_lines) + '\n')
     return cnt_corrections
 
+def predict_sing_stc(stc, model):
+    
+    batch = [stc.split()]
+    sequences = model.preprocess(batch)
+
+    probabilities, idxs, error_probs = model.predict(sequences)
+
+    pred_batch = model.postprocess_batch(batch, probabilities,
+                                        idxs, error_probs)
+
+    return pred_batch
+
 
 def main(args):
     # get all paths
@@ -46,11 +60,21 @@ def main(args):
                          is_ensemble=args.is_ensemble,
                          weigths=args.weights)
 
-    cnt_corrections = predict_for_file(args.input_file, args.output_file, model,
-                                       batch_size=args.batch_size, 
-                                       to_normalize=args.normalize)
+    # cnt_corrections = predict_for_file(args.input_file, args.output_file, model,
+    #                                    batch_size=args.batch_size, 
+    #                                    to_normalize=args.normalize)
+
     # evaluate with m2 or ERRANT
-    print(f"Produced overall corrections: {cnt_corrections}")
+    # print(f"Produced overall corrections: {cnt_corrections}")
+    stc = 'This are grammatical sentence .'
+    # preds = predict_sing_stc(stc, model)
+
+    target_path =  '/home/alta/BLTSpeaking/exp-ytl28/projects/gec-pretrained/exp-t5-written/lib/gec-train-bpe-written/prep-v2/test.tgt'
+    pred_path = '/data/test_pred/test_pred.txt'
+
+    convert_data_from_raw_files(source_file=args.input_file,target_file=target_path,output_file=pred_path,chunk_size=50)
+
+
 
 
 if __name__ == '__main__':
@@ -58,7 +82,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_path',
                         help='Path to the model file.', nargs='+',
-                        default='/home/alta/BLTSpeaking/exp-vr313/GEC/gector/trained_models/roberta_1_gectorv2.th'
+                        default=['/home/alta/BLTSpeaking/exp-vr313/GEC/gector/trained_models/roberta_1_gectorv2.th']
                         )
     parser.add_argument('--vocab_path',
                         help='Path to the model file.',
