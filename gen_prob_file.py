@@ -3,33 +3,7 @@ import argparse
 from utils.helpers import read_lines, normalize
 from gector.gec_model import GecBERTModel
 
-from utils.preprocess_data import convert_data_from_raw_files
-
-
-def predict_for_file(input_file, output_file, model, batch_size=32, to_normalize=False):
-    test_data = read_lines(input_file)
-    predictions = []
-    cnt_corrections = 0
-    batch = []
-    for sent in test_data:
-        batch.append(sent.split())
-        if len(batch) == batch_size:
-            preds, cnt = model.handle_batch(batch)
-            predictions.extend(preds)
-            cnt_corrections += cnt
-            batch = []
-    if batch:
-        preds, cnt = model.handle_batch(batch)
-        predictions.extend(preds)
-        cnt_corrections += cnt
-
-    result_lines = [" ".join(x) for x in predictions]
-    if to_normalize:
-        result_lines = [normalize(line) for line in result_lines]
-
-    with open(output_file, 'w') as f:
-        f.write("\n".join(result_lines) + '\n')
-    return cnt_corrections
+from utils.preprocess_data import convert_data_from_raw_files, my_get_prob_edits
 
 def predict_sing_stc(stc, model):
     
@@ -41,7 +15,9 @@ def predict_sing_stc(stc, model):
     pred_batch = model.postprocess_batch(batch, probabilities,
                                         idxs, error_probs)
 
-    return pred_batch
+    result_line = [" ".join(x) for x in pred_batch]
+
+    return result_line ,probabilities, idxs
 
 
 def main(args):
@@ -60,22 +36,29 @@ def main(args):
                          is_ensemble=args.is_ensemble,
                          weigths=args.weights)
 
-    # cnt_corrections = predict_for_file(args.input_file, args.output_file, model,
-    #                                    batch_size=args.batch_size, 
-    #                                    to_normalize=args.normalize)
 
-    # evaluate with m2 or ERRANT
-    # print(f"Produced overall corrections: {cnt_corrections}")
-    stc = 'This are grammatical sentence .'
-    # preds = predict_sing_stc(stc, model)
+    stc = 'Finally, about the free three hours, my personal prefer to go shopping .'
 
     target_path =  '/home/alta/BLTSpeaking/exp-ytl28/projects/gec-pretrained/exp-t5-written/lib/gec-train-bpe-written/prep-v2/test.tgt'
-    pred_path = '/data/test_pred/test_pred.txt'
+    source_path = args.input_file
+    output_path = args.output_file
 
-    convert_data_from_raw_files(source_file=args.input_file,target_file=target_path,output_file=pred_path,chunk_size=50)
+    edits, probs, labels = my_get_prob_edits(target_file=target_path, source_file=source_path, model=model)
 
+    # print(edits, probs, labels)
 
+    lines = []
+    for i in range(len(edits)):
+        line = "{} {} {}\n".format(probs[i], labels[i], edits[i])
+        lines.append(line)
 
+    with open(output_path, 'w') as f:
+        f.writelines(lines)
+
+    # output, probabilities, idxs = predict_sing_stc(stc, model)
+    # print(output, probabilities, idxs)
+
+    # convert_data_from_raw_files(source_file=args.input_file,target_file=target_path,output_file="",chunk_size=50)
 
 if __name__ == '__main__':
     # read parameters
