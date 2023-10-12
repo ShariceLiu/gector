@@ -19,6 +19,8 @@ from gector.tokenizer_indexer import PretrainedBertIndexer
 from utils.helpers import PAD, UNK, get_target_sent_by_edits, START_TOKEN
 from utils.helpers import get_weights_name
 
+import numpy as np
+
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
 logger = logging.getLogger(__file__)
 
@@ -34,10 +36,11 @@ class GecBERTModel(object):
                  model_name='roberta',
                  special_tokens_fix=1,
                  is_ensemble=True,
-                 min_error_probability=0.0,
+                 min_error_probability=0,
                  confidence=0,
                  del_confidence=0,
                  resolve_cycles=False,
+                 detect_namespace: str = "d_tags",
                  ):
         self.model_weights = list(map(float, weigths)) if weigths else [1] * len(model_paths)
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -51,6 +54,8 @@ class GecBERTModel(object):
         self.confidence = confidence
         self.del_conf = del_confidence
         self.resolve_cycles = resolve_cycles
+        self.incorr_index = self.vocab.get_token_index("INCORRECT",
+                                                       namespace=detect_namespace)
         # set training parameters and operations
 
         self.indexers = []
@@ -60,6 +65,7 @@ class GecBERTModel(object):
                 model_name, special_tokens_fix = self._get_model_data(model_path)
             weights_name = get_weights_name(model_name, lowercase_tokens)
             self.indexers.append(self._get_indexer(weights_name, special_tokens_fix))
+            self.text_field_embedder=self._get_embbeder(weights_name, special_tokens_fix)
             model = Seq2Labels(vocab=self.vocab,
                                text_field_embedder=self._get_embbeder(weights_name, special_tokens_fix),
                                confidence=self.confidence,
@@ -109,20 +115,21 @@ class GecBERTModel(object):
                     continue
         print("Model is restored", file=sys.stderr)
 
-    def predict(self, batches):
+    def predict(self, batches, masking =None, masking_idxs=None):
         t11 = time()
         predictions = []
         for batch, model in zip(batches, self.models):
             batch = util.move_to_device(batch.as_tensor_dict(), 0 if torch.cuda.is_available() else -1)
             with torch.no_grad():
-                prediction = model.forward(**batch)
+                prediction = model.forward(**batch, masking=masking, masking_idxs=masking_idxs)
             predictions.append(prediction)
 
-        preds, idx, error_probs = self._convert(predictions)
+        preds, idx, error_probs, all_class_probs, logits_labels, embeddings = self._convert(predictions)
+        # print(f"all error probs:{all_error_probs}")
         t55 = time()
         if self.log:
             print(f"Inference time {t55 - t11}")
-        return preds, idx, error_probs
+        return preds, idx, error_probs, all_class_probs, logits_labels, embeddings
 
     def get_token_action(self, token, index, prob, sugg_token):
         """Get lost of suggested actions for token."""
@@ -151,7 +158,7 @@ class GecBERTModel(object):
             pretrained_model=weigths_name,
             requires_grad=False,
             top_layer_only=True,
-            special_tokens_fix=special_tokens_fix)
+            special_tokens_fix=special_tokens_fix,)
         }
         text_field_embedder = BasicTextFieldEmbedder(
             token_embedders=embedders,
@@ -189,14 +196,39 @@ class GecBERTModel(object):
     def _convert(self, data):
         all_class_probs = torch.zeros_like(data[0]['class_probabilities_labels'])
         error_probs = torch.zeros_like(data[0]['max_error_probability'])
-        for output, weight in zip(data, self.model_weights):
+        d_tag_probs = torch.zeros_like(data[0]['class_probabilities_d_tags'])
+        encoded_text = torch.zeros_like(data[0]['encoded_text'])
+        logits_labels = data[0]['logits_labels']
+        for output, weight in zip(data, self.model_weights): # calculate weighted average, default weights are uniform
             all_class_probs += weight * output['class_probabilities_labels'] / sum(self.model_weights)
             error_probs += weight * output['max_error_probability'] / sum(self.model_weights)
+            d_tag_probs += weight * output['class_probabilities_d_tags'] / sum(self.model_weights)
+            encoded_text += weight * output['encoded_text'] / sum(self.model_weights)
 
-        max_vals = torch.max(all_class_probs, dim=-1)
+        max_vals = torch.max(all_class_probs, dim=-1) 
         probs = max_vals[0].tolist()
         idx = max_vals[1].tolist()
-        return probs, idx, error_probs.tolist()
+
+        # batch_size, num_tokens, num_class = all_class_probs.size()
+        # random_idx = torch.zeros_like(max_vals[1])
+        # random_prob = torch.zeros_like(random_idx)
+        # for i in range(batch_size):
+        #     for j in range(num_tokens):
+        #         # print(all_class_probs[i,j].size())
+        #         class_prob = np.array(all_class_probs[i,j].tolist())
+        #         class_prob = class_prob/class_prob.sum()
+        #         # print(class_prob.sum())
+        #         random_idx[i,j] = np.random.choice(num_class, p=class_prob)
+        #         random_prob[i,j] = all_class_probs[i,j,random_idx[i,j]]
+        
+        # random_idx = random_idx.tolist()
+        # random_prob = random_prob.tolist()
+        # # print(f"size of idx:{random_idx.size()}")
+        # # print(f"idx:{random_idx}")
+
+        all_error_probs = d_tag_probs[:,:,1]
+        # print(f"incorr index:{self.incorr_index}")
+        return probs, idx, error_probs.tolist() , all_class_probs.tolist(), logits_labels.tolist(), encoded_text.tolist()
 
     def update_final_batch(self, final_batch, pred_ids, pred_batch,
                            prev_preds_dict):
@@ -236,7 +268,9 @@ class GecBERTModel(object):
                 continue
 
             # skip whole sentence if probability of correctness is not high
+            # print(f'min error prob:{self.min_error_probability}, true error prob:{error_prob}')
             if error_prob < self.min_error_probability:
+                print(f'true error prob:{error_prob}')
                 all_results.append(tokens)
                 continue
 
@@ -261,7 +295,7 @@ class GecBERTModel(object):
             all_results.append(get_target_sent_by_edits(tokens, edits))
         return all_results
 
-    def handle_batch(self, full_batch):
+    def handle_batch(self, full_batch, masking = None):
         """
         Handle batch of requests.
         """
@@ -280,7 +314,7 @@ class GecBERTModel(object):
 
             if not sequences:
                 break
-            probabilities, idxs, error_probs = self.predict(sequences)
+            probabilities, idxs, error_probs, d_tag_probs, _, _ = self.predict(sequences, masking)
 
             pred_batch = self.postprocess_batch(orig_batch, probabilities,
                                                 idxs, error_probs)

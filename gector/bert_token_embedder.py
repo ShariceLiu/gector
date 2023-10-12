@@ -9,6 +9,8 @@ from allennlp.modules.token_embedders.token_embedder import TokenEmbedder
 from allennlp.nn import util
 from transformers import AutoModel, PreTrainedModel
 
+import numpy
+
 logger = logging.getLogger(__name__)
 
 
@@ -27,6 +29,7 @@ class PretrainedBertModel:
             return PretrainedBertModel._cache[model_name]
 
         model = AutoModel.from_pretrained(model_name)
+        # import pdb;pdb.set_trace()
         if cache_model:
             cls._cache[model_name] = model
 
@@ -84,11 +87,30 @@ class BertEmbedder(TokenEmbedder):
 
     def get_output_dim(self) -> int:
         return self.output_dim
+    
+    def _mask_embeddings(self, embedding, masking_percent, masking_idxs=None):
+        # print(masking_percent, masking_idx)
+        batch_size, sequence_length, feature_length = embedding.size()
+        # print(sequence_length, feature_length)
+        width_t = max(round(feature_length*masking_percent),1)
+        mean_feature = torch.mean(embedding, -1, True)
+        zero_feature = mean_feature*0.0
+
+        if isinstance(masking_idxs,numpy.ndarray):
+            embedding[:,:,masking_idxs] = zero_feature.repeat(1,1,width_t)
+        else:
+            position_d = numpy.random.randint(0,feature_length-width_t) # position for masking features
+            embedding[:,:,position_d:position_d+width_t] = zero_feature.repeat(1,1,width_t)
+
+        # import pdb;pdb.set_trace()
+        return embedding
 
     def forward(
         self,
         input_ids: torch.LongTensor,
-        offsets: torch.LongTensor = None
+        offsets: torch.LongTensor = None,
+        masking=None,
+        masking_idxs=None,
     ) -> torch.Tensor:
         """
         Parameters
@@ -140,10 +162,25 @@ class BertEmbedder(TokenEmbedder):
         input_mask = (input_ids != 0).long()
         # input_ids may have extra dimensions, so we reshape down to 2-d
         # before calling the BERT model and then reshape back at the end.
-        all_encoder_layers = self.bert_model(
-            input_ids=util.combine_initial_dims(input_ids),
-            attention_mask=util.combine_initial_dims(input_mask),
-        )[0]
+        
+        # do masking if needed
+        if masking:
+            embed_mapping=self.bert_model.get_input_embeddings()
+            # import pdb; pdb.set_trace()
+            orig_embed = embed_mapping(util.combine_initial_dims(input_ids))
+            masked_embed = self._mask_embeddings(orig_embed, masking_percent=masking, masking_idxs=masking_idxs)
+            
+            # import pdb;pdb.set_trace()
+            all_encoder_layers = self.bert_model(
+                inputs_embeds=masked_embed,
+                attention_mask=util.combine_initial_dims(input_mask),
+            )[0]
+        else:
+            all_encoder_layers = self.bert_model(
+                input_ids=util.combine_initial_dims(input_ids),
+                attention_mask=util.combine_initial_dims(input_mask),
+            )[0]
+        
         if len(all_encoder_layers[0].shape) == 3:
             all_encoder_layers = torch.stack(all_encoder_layers)
         elif len(all_encoder_layers[0].shape) == 2:
@@ -257,7 +294,7 @@ class PretrainedBertEmbedder(BertEmbedder):
 
         super().__init__(
             bert_model=model,
-            top_layer_only=top_layer_only
+            top_layer_only=top_layer_only,
         )
 
         if special_tokens_fix:

@@ -1,4 +1,5 @@
 """Basic model. Predicts tags for every token"""
+from base64 import encode
 from typing import Dict, Optional, List, Any
 
 import numpy
@@ -93,7 +94,9 @@ class Seq2Labels(Model):
                 tokens: Dict[str, torch.LongTensor],
                 labels: torch.LongTensor = None,
                 d_tags: torch.LongTensor = None,
-                metadata: List[Dict[str, Any]] = None) -> Dict[str, torch.Tensor]:
+                metadata: List[Dict[str, Any]] = None,
+                masking = None,
+                masking_idxs = None,) -> Dict[str, torch.Tensor]:
         # pylint: disable=arguments-differ
         """
         Parameters
@@ -129,8 +132,13 @@ class Seq2Labels(Model):
             A scalar loss to be optimised.
 
         """
-        encoded_text = self.text_field_embedder(tokens)
-        batch_size, sequence_length, _ = encoded_text.size()
+        encoded_text = self.text_field_embedder.forward(tokens, masking=masking, masking_idxs=masking_idxs) # need masking
+
+        batch_size, sequence_length, feature_length = encoded_text.size()
+
+        # if masking:
+        #     encoded_text = self.masked_embeddings(masking,tokens, labels, d_tags, metadata)
+        
         mask = get_text_field_mask(tokens)
         logits_labels = self.tag_labels_projection_layer(self.predictor_dropout(encoded_text))
         logits_d = self.tag_detect_projection_layer(encoded_text)
@@ -150,7 +158,8 @@ class Seq2Labels(Model):
                        "logits_d_tags": logits_d,
                        "class_probabilities_labels": class_probabilities_labels,
                        "class_probabilities_d_tags": class_probabilities_d,
-                       "max_error_probability": incorr_prob}
+                       "max_error_probability": incorr_prob,
+                       'encoded_text':encoded_text}
         if labels is not None and d_tags is not None:
             loss_labels = sequence_cross_entropy_with_logits(logits_labels, labels, mask,
                                                              label_smoothing=self.label_smoothing)
@@ -163,6 +172,24 @@ class Seq2Labels(Model):
         if metadata is not None:
             output_dict["words"] = [x["words"] for x in metadata]
         return output_dict
+
+    def masked_embeddings(self,  # type: ignore
+                          masking_percent,
+                tokens: Dict[str, torch.LongTensor],
+                labels: torch.LongTensor = None,
+                d_tags: torch.LongTensor = None,
+                metadata: List[Dict[str, Any]] = None,
+                ):
+                
+        encoded_text = self.text_field_embedder(tokens) # need masking
+        batch_size, sequence_length, feature_length = encoded_text.size()
+        width_t = max(round(feature_length*masking_percent),1)
+        position_d = numpy.random.randint(0,feature_length-width_t) # position for masking features
+
+        mean_feature = torch.mean(encoded_text, 2, True)
+        encoded_text[:,:,position_d:position_d+width_t] = mean_feature.repeat(1,1,width_t)
+
+        return encoded_text
 
     @overrides
     def decode(self, output_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
