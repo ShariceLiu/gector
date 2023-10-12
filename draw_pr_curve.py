@@ -2,6 +2,17 @@ from sklearn.metrics import precision_recall_curve
 import matplotlib.pyplot as plt
 import numpy as np
 
+def computeFScore(tp, fp, fn, beta = 1.0):
+    if tp:
+        p = float(tp)/(tp+fp) if fp else 1.0
+        r = float(tp)/(tp+fn) if fn else 1.0
+        f = float((1+(beta**2))*p*r)/(((beta**2)*p)+r) if p+r else 0.0
+    else:
+        p = 0.0 if fp else 1.0
+        r = 0.0 if fn else 1.0
+        f = float((1+(beta**2))*p*r)/(((beta**2)*p)+r) if p+r else 0.0
+    return round(p, 4), round(r, 4), round(f, 4)
+
 def draw_pr_curve(filename,col = 0):
     '''
     draw pr curve according to file 
@@ -26,14 +37,20 @@ def draw_pr_curve(filename,col = 0):
     return precisions, recalls
 
 if __name__ == '__main__':
-    filename = "data/test_pred/test_pred.txt"
-    precisions, recalls = draw_pr_curve(filename)
-
+    filename = "/home/zl437/rds/hpc-work/gector/fce-data/with_prob/text_pred_class.txt"
+    filename_2 = '/home/mifs/zl437/gector/data/test_pred/text_pred_conll14_d_tag.txt'
+    filename_nucle_baseline = '/home/zl437/rds/hpc-work/gector/bea-data/nucle/with_prob/test_pred_bea.txt'
+    filename_fce_baseline = '/home/zl437/rds/hpc-work/gector/fce-data/with_prob/test_pred_class_fce.txt'
+    # precisions, recalls = draw_pr_curve(filename)
+    # plt.plot(recalls*100,precisions*100)
+    precisions, recalls = draw_pr_curve(filename_nucle_baseline)
     plt.plot(recalls*100,precisions*100)
-        
+    
     plt.xlabel('Recall')
     plt.ylabel('Precision')
     plt.title("PR curve")
+    # plt.legend(['class prob', 'tag prob'])
 
     plt.show()
-    plt.savefig("PR_curve.png")
+    plt.savefig("/home/zl437/rds/hpc-work/gector/bea-data/nucle/with_prob/PR_curve_nucle.png")
+    print("saved")

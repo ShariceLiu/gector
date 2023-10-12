@@ -4,7 +4,7 @@ from utils.helpers import read_lines, normalize
 from gector.gec_model import GecBERTModel
 
 
-def predict_for_file(input_file, output_file, model, batch_size=32, to_normalize=False):
+def predict_for_file(input_file, output_file, model, batch_size=32, to_normalize=False, masking = None):
     test_data = read_lines(input_file)
     predictions = []
     cnt_corrections = 0
@@ -16,8 +16,9 @@ def predict_for_file(input_file, output_file, model, batch_size=32, to_normalize
             predictions.extend(preds)
             cnt_corrections += cnt
             batch = []
+        # print(cnt_corrections)
     if batch:
-        preds, cnt = model.handle_batch(batch)
+        preds, cnt = model.handle_batch(batch, masking)
         predictions.extend(preds)
         cnt_corrections += cnt
 
@@ -47,8 +48,8 @@ def main(args):
                          weigths=args.weights)
 
     cnt_corrections = predict_for_file(args.input_file, args.output_file, model,
-                                       batch_size=args.batch_size, 
-                                       to_normalize=args.normalize)
+                                       batch_size=1, 
+                                       to_normalize=args.normalize, masking = args.masking)
     # evaluate with m2 or ERRANT
     print(f"Produced overall corrections: {cnt_corrections}")
 
@@ -58,17 +59,24 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model_path',
                         help='Path to the model file.', nargs='+',
-                        required=True)
+                        default=['/home/zl437/rds/hpc-work/gector/data/roberta_1_gectorv2.th'])
     parser.add_argument('--vocab_path',
                         help='Path to the model file.',
-                        default='data/output_vocabulary'  # to use pretrained models
+                        default='/home/zl437/rds/hpc-work/gector/data/output_vocabulary'  # to use pretrained models
+                        )
+    parser.add_argument('--masking',
+                        help='Percent of masking.',
+                        type=float,
+                        default=None
                         )
     parser.add_argument('--input_file',
                         help='Path to the evalset file',
-                        required=True)
+                        # default='/home/zl437/rds/hpc-work/gector/bea-data/nucle/source-test.txt'
+                        default='/home/zl437/rds/hpc-work/gector/fce-data/train/source-train.txt')
     parser.add_argument('--output_file',
                         help='Path to the output file',
-                        required=True)
+                        # default='/home/zl437/rds/hpc-work/gector/bea-data/nucle/predict-test.txt'
+                        default='/home/zl437/rds/hpc-work/gector/fce-data/predict-train-3.txt')
     parser.add_argument('--max_len',
                         type=int,
                         help='The max sentence length'
@@ -95,7 +103,7 @@ if __name__ == '__main__':
     parser.add_argument('--iteration_count',
                         type=int,
                         help='The number of iterations of the model.',
-                        default=5)
+                        default=1)
     parser.add_argument('--additional_confidence',
                         type=float,
                         help='How many probability to add to $KEEP token.',
